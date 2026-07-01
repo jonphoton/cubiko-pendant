@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Cubiko Pendant</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      max-width: 640px;
+      margin: 3rem auto;
+      padding: 0 1.25rem;
+      line-height: 1.55;
+    }
+    img { width: 100%; height: auto; border-radius: 10px; margin: 1rem 0; }
+    esp-web-install-button {
+      --esp-tools-button-color: #fff;
+      --esp-tools-button-background-color: #0a7d2e;
+      --esp-tools-button-text-color: #fff;
+      display: inline-block;
+      margin: 1rem 0;
+    }
+    button.install {
+      background: #0a7d2e; color: #fff; border: 0; padding: 0.75rem 1.5rem;
+      border-radius: 8px; font-size: 1rem; cursor: pointer;
+    }
+    code { background: #eee; padding: 0.1em 0.3em; border-radius: 4px; }
+    .unsupported { color: #b00; }
+  </style>
+</head>
+<body>
+  <h1>Install Cubiko Pendant</h1>
+  <img src="M5DialCubiko.png" alt="M5Dial plugged into a Cubiko CNC">
+
+  <p><strong>Steps:</strong></p>
+  <ol>
+    <li>Unplug the M5Dial from the Cubiko.</li>
+    <li>Plug it into your laptop's USB-C port <strong>while holding the G0 side button</strong>. Release G0 after it's plugged in.</li>
+    <li>Click <strong>Install</strong> below and choose the serial port that appeared (usually <code>/dev/tty.usbmodem…</code> on macOS or <code>COMx</code> on Windows).</li>
+    <li>Wait ~30 seconds. When it says "Installation complete", unplug and plug back into the Cubiko.</li>
+  </ol>
+
+  <esp-web-install-button manifest="manifest.json">
+    <button slot="activate" class="install">Install</button>
+    <span slot="unsupported" class="unsupported">
+      Your browser does not support WebSerial. Please use Chrome or Edge on a laptop.
+    </span>
+    <span slot="not-allowed" class="unsupported">
+      This page must be served over HTTPS. If you're viewing this locally, try the hosted version at
+      <a href="https://jonphoton.github.io/cubiko-pendant/">jonphoton.github.io/cubiko-pendant</a>.
+    </span>
+  </esp-web-install-button>
+
+  <h2>First-boot WiFi</h2>
+  <p>
+    After install, the pendant creates a WiFi network called
+    <code>M5DialCubiko-Setup</code>. Join it from your phone; a captive portal
+    lets you pick your home WiFi. See the
+    <a href="https://github.com/jonphoton/cubiko-pendant#first-boot-wifi-setup">README</a>
+    for details.
+  </p>
+</body>
+</html>

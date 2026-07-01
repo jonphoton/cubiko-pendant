@@ -1,0 +1,11 @@
+.pio/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+build/
+.cache/
+__pycache__/
+*.pyc
