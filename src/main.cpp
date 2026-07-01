@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <LittleFS.h>
 #include <SimpleFTPServer.h>
+#include <WebServer.h>
 #ifdef USE_CH341_TRANSPORT
 #include <EspUsbHost.h>
 #endif
@@ -112,6 +113,7 @@ static uint32_t g_lastStatusMs = 0;
 static constexpr uint32_t STATUS_INTERVAL_MS = 200;
 
 static FtpServer g_ftp;
+static WebServer g_http(80);
 static bool      g_wifiConnected = false;
 static String    g_ipStr;
 
@@ -766,6 +768,91 @@ static void setupFtp() {
 }
 
 // ---------------------------------------------------------------
+// HTTP drop UI: same-origin drag-and-drop page served from the
+// device itself at http://cubiko.local/.
+// ---------------------------------------------------------------
+static const char UPLOAD_HTML[] PROGMEM = R"HTML(<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cubiko Pendant</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+max-width:520px;margin:2.5rem auto;padding:0 1rem;line-height:1.5;color:#eee;
+background:#181818}
+h1{font-weight:600}
+.drop{border:2px dashed #555;border-radius:12px;padding:3rem 1rem;text-align:center;
+color:#aaa;background:#1e1e1e;font-size:15pt;transition:all .12s}
+.drop.hover{border-color:#0a7d2e;color:#eee}
+input[type=file]{display:none}
+.btn{background:#0a7d2e;color:#fff;border:0;padding:.6rem 1.2rem;border-radius:8px;
+font-size:1rem;cursor:pointer;margin-top:1rem}
+pre{background:#111;color:#0d0;padding:.8rem;border-radius:8px;min-height:2rem;
+font-family:'SF Mono',Menlo,monospace;font-size:11pt;white-space:pre-wrap}
+a{color:#4bd}
+</style></head><body>
+<h1>Cubiko Pendant</h1>
+<p>Drop a G-code file here — the pendant will auto-arm it as the current job.
+Press play on the pendant to run.</p>
+<div id="drop" class="drop">Drop files here<br><small>or</small><br>
+<button class="btn" id="pick">Pick files</button></div>
+<input type="file" id="file" multiple>
+<pre id="log"></pre>
+<p style="text-align:center;font-size:11pt;color:#666"><a href="https://github.com/jonphoton/cubiko-pendant">github.com/jonphoton/cubiko-pendant</a></p>
+<script>
+const drop=document.getElementById('drop'),file=document.getElementById('file'),
+pick=document.getElementById('pick'),log=document.getElementById('log');
+const say=m=>{log.textContent+=(log.textContent?'\n':'')+m};
+pick.onclick=()=>file.click();
+file.onchange=()=>upload([...file.files]);
+drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('hover')});
+drop.addEventListener('dragleave',()=>drop.classList.remove('hover'));
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('hover');
+upload([...e.dataTransfer.files])});
+async function upload(files){for(const f of files){
+say('→ '+f.name+' ('+f.size+' bytes)');
+const fd=new FormData();fd.append('file',f);
+try{const r=await fetch('/upload',{method:'POST',body:fd});
+say(r.ok?'  ok':'  error '+r.status)}catch(e){say('  '+e.message)}}}
+</script></body></html>)HTML";
+
+static File g_httpUploadFile;
+
+static void onHttpRoot() {
+  g_http.send_P(200, "text/html; charset=utf-8", UPLOAD_HTML);
+}
+
+static void onHttpUpload() {
+  HTTPUpload& upload = g_http.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    String name = upload.filename;
+    if (!name.startsWith("/")) name = "/" + name;
+    if (g_httpUploadFile) g_httpUploadFile.close();
+    g_httpUploadFile = LittleFS.open(name, "w");
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (g_httpUploadFile) {
+      g_httpUploadFile.write(upload.buf, upload.currentSize);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (g_httpUploadFile) {
+      String name = upload.filename;
+      if (!name.startsWith("/")) name = "/" + name;
+      g_httpUploadFile.close();
+      g_uploadedPath = name;
+      g_uploadDone   = true;
+    }
+  }
+}
+
+static void setupHttp() {
+  if (!g_wifiConnected) return;
+  g_http.on("/", HTTP_GET, onHttpRoot);
+  g_http.on("/upload", HTTP_POST,
+            [](){ g_http.send(200, "text/plain", "ok"); },
+            onHttpUpload);
+  g_http.begin();
+}
+
+// ---------------------------------------------------------------
 // Arduino entry points
 // ---------------------------------------------------------------
 void setup() {
@@ -778,6 +865,7 @@ void setup() {
   g_cnc->begin();
   setupWifi();
   setupFtp();
+  setupHttp();
 
   g_lastEncoder = M5Dial.Encoder.read();
   drawAll();
@@ -788,7 +876,10 @@ void loop() {
   handleTouch();
   handleEncoder();
   handleClick();
-  if (g_wifiConnected) g_ftp.handleFTP();
+  if (g_wifiConnected) {
+    g_ftp.handleFTP();
+    g_http.handleClient();
+  }
 
   if (g_uploadDone) {
     g_uploadDone = false;

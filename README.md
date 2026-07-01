@@ -15,10 +15,10 @@ A handheld pendant controller for the [Genmitsu Cubiko](https://genmitsu.com/pag
 
 ## Physical setup
 
-You need exactly one thing: a **USB-C to USB-C cable**.
+You need exactly one thing: a **USB-C to USB-B cable** (the pendant is USB-C, the Cubiko is USB-B — the same cable that came with your Cubiko).
 
 1. (Optional) 3D-print `hardware/PendantHolder.stl` and clip it near your Cubiko so the pendant has somewhere to live.
-2. Plug the M5Dial into the USB-C port on the front of the Cubiko.
+2. Plug the USB-B end into the Cubiko and the USB-C end into the M5Dial.
 3. Turn on the Cubiko.
 
 The Cubiko provides both **5 V power** and **USB data** through that single cable — no external power supply, no OTG cable, no splitter. The M5Dial's screen turns on immediately.
@@ -71,13 +71,23 @@ The pendant needs to know your home WiFi to expose its FTP server. The first tim
 
 The pendant's IP is shown at the bottom of the jog screen. It's also advertised on your LAN as **`cubiko.local`** via mDNS — so on macOS / recent Windows / Linux you can use the hostname directly.
 
+### From any browser (easiest)
+
+Open **[http://cubiko.local/](http://cubiko.local/)** on any computer or phone on the same WiFi. You get a drag-and-drop page served by the pendant itself. Drop files, done.
+
+No install, no CLI, works from a phone. This is the recommended path for most users.
+
+### From the command line
+
 **With `curl`** (built into macOS and Linux):
 
 ```
 curl -T job.gcode ftp://cubiko:cubiko@cubiko.local/
 ```
 
-**With the Python drag-and-drop uploader** in `tools/uploader/`:
+### Native desktop app
+
+`tools/uploader/cubiko_uploader.py` is a small PyQt6 app if you prefer a native window instead of the browser:
 
 ```
 uv run tools/uploader/cubiko_uploader.py
@@ -89,8 +99,6 @@ or with plain pip:
 pip install -r tools/uploader/requirements.txt
 python3 tools/uploader/cubiko_uploader.py
 ```
-
-The Cubiko Uploader window has a drop zone and an IP/hostname field (defaults to `cubiko.local`). Drop a file, watch the pendant status flip to `RDY <filename>`, then press **▶** on the pendant to run.
 
 ## On-device controls
 
