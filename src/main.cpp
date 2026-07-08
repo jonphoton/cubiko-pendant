@@ -226,7 +226,11 @@ static CncTransport*     g_cnc = &g_ch341Transport;
 // Button-state predicates
 // ---------------------------------------------------------------
 static bool calEnabled() {
-  return g_jobState == JobState::Idle && !g_calibrating;
+  // Allowed any time nothing is actively moving. After a job ends
+  // (Done) or is stopped/loaded (Loaded), CAL should be usable again.
+  return (g_jobState == JobState::Idle   ||
+          g_jobState == JobState::Loaded ||
+          g_jobState == JobState::Done) && !g_calibrating;
 }
 static bool playEnabled() {
   return g_jobState == JobState::Loaded ||
@@ -660,18 +664,22 @@ static void handleEncoder() {
   const long detents  = delta_raw / ENC_COUNTS_PER_DETENT;
   if (detents == 0) return;
   g_lastEncoder += detents * ENC_COUNTS_PER_DETENT;
+
+  // During a job or calibration the wheel is inert: we consume the
+  // detents (so they don't queue up and fire when the job ends) but
+  // do nothing with them — no jog send, no readout change, no local
+  // accumulator update.
+  if (g_jobState == JobState::Playing ||
+      g_jobState == JobState::Paused  ||
+      g_calibrating) {
+    return;
+  }
+
   const float step_mm = detents * STEP_MM[(int)g_speed];
   g_jogAccumMm  += step_mm;
   drawJogReadout();
 
-  // Don't drive the CNC while a job or calibration is in flight, and
-  // don't bother if the transport reports no device.
-  if (g_jobState == JobState::Playing ||
-      g_jobState == JobState::Paused  ||
-      g_calibrating ||
-      !g_cnc->connected()) {
-    return;
-  }
+  if (!g_cnc->connected()) return;
   const char* a = (g_axis == Axis::X) ? "X"
                 : (g_axis == Axis::Y) ? "Y" : "Z";
   char cmd[64];
