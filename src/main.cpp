@@ -109,6 +109,10 @@ static float    g_jogAccumMm  = 0.0f;
 static float    g_workPos[3]   = {0.0f, 0.0f, 0.0f};
 static float    g_wcoOffset[3] = {0.0f, 0.0f, 0.0f};
 static bool     g_haveWorkPos  = false;
+// Current grbl feed override %. During a run the encoder emits
+// realtime 0x93/0x94 (±1%) commands and updates this locally;
+// parseStatusLine keeps it synced with what grbl actually applies.
+static int      g_feedOverride = 100;
 static uint32_t g_lastStatusMs = 0;
 static constexpr uint32_t STATUS_INTERVAL_MS = 200;
 
@@ -371,16 +375,24 @@ static void drawCenter() {
 
 static void drawJogReadout() {
   M5Dial.Display.fillRect(0, JOG_Y - 8, SCREEN, 16, TFT_BLACK);
-  M5Dial.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5Dial.Display.setTextDatum(middle_center);
   M5Dial.Display.setTextSize(2);
   char buf[32];
-  if (g_haveWorkPos) {
-    snprintf(buf, sizeof(buf), "%+8.2f mm", g_workPos[(int)g_axis]);
+  if (g_jobState == JobState::Playing || g_jobState == JobState::Paused) {
+    // During a run the wheel steers feed override — show that instead
+    // of the position (position is on the CNC's own display, and the
+    // number the user is actively controlling is the %).
+    M5Dial.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
+    snprintf(buf, sizeof(buf), "FEED %d%%", g_feedOverride);
   } else {
-    // No status from grbl yet (stub transport, disconnected, or first
-    // few ms after boot). Fall back to the local jog accumulator.
-    snprintf(buf, sizeof(buf), "%+8.2f mm", g_jogAccumMm);
+    M5Dial.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    if (g_haveWorkPos) {
+      snprintf(buf, sizeof(buf), "%+8.2f mm", g_workPos[(int)g_axis]);
+    } else {
+      // No status from grbl yet (stub transport, disconnected, or
+      // first few ms after boot). Fall back to the jog accumulator.
+      snprintf(buf, sizeof(buf), "%+8.2f mm", g_jogAccumMm);
+    }
   }
   M5Dial.Display.drawString(buf, CENTER, JOG_Y);
 }
@@ -433,6 +445,8 @@ static void loadJob(const String& path) {
 static void onPlay() {
   if (!playEnabled()) return;
   if (g_jobState == JobState::Loaded) {
+    g_feedOverride = 100;                       // fresh start at 100%
+    g_cnc->realtime(0x90);                      // grbl feed override reset
     g_jobState = JobState::Playing;
   } else if (g_jobState == JobState::Paused) {
     g_cnc->realtime('~');                       // grbl cycle start / resume
@@ -444,6 +458,8 @@ static void onPlay() {
     // Re-arm the same file and play it again.
     if (g_jobPath.length()) {
       loadJob(g_jobPath);
+      g_feedOverride = 100;
+      g_cnc->realtime(0x90);
       g_jobState = JobState::Playing;
     }
   }
@@ -517,6 +533,18 @@ static void parseStatusLine(const String& s) {
       }
       for (int i = 0; i < 3; i++) g_workPos[i] = mp[i] - g_wcoOffset[i];
       updated = true;
+    }
+  }
+  // Ov:<feed>,<rapid>,<spindle> — keep our local feed override in sync
+  // in case grbl clamps it (10-200%).
+  const int ovIdx = s.indexOf("Ov:");
+  if (ovIdx >= 0) {
+    int fo = 0;
+    if (sscanf(s.c_str() + ovIdx, "Ov:%d", &fo) == 1 && fo > 0) {
+      if (fo != g_feedOverride) {
+        g_feedOverride = fo;
+        updated = true;
+      }
     }
   }
   if (updated) {
@@ -665,13 +693,19 @@ static void handleEncoder() {
   if (detents == 0) return;
   g_lastEncoder += detents * ENC_COUNTS_PER_DETENT;
 
-  // During a job or calibration the wheel is inert: we consume the
-  // detents (so they don't queue up and fire when the job ends) but
-  // do nothing with them — no jog send, no readout change, no local
-  // accumulator update.
-  if (g_jobState == JobState::Playing ||
-      g_jobState == JobState::Paused  ||
-      g_calibrating) {
+  // Calibration: consume detents, do nothing.
+  if (g_calibrating) return;
+
+  // During a run the wheel adjusts grbl's feed override (±1% per
+  // detent) via realtime commands 0x93/0x94.
+  if (g_jobState == JobState::Playing || g_jobState == JobState::Paused) {
+    const uint8_t rt = detents > 0 ? 0x93 : 0x94;
+    const long    n  = detents > 0 ? detents : -detents;
+    for (long i = 0; i < n; i++) g_cnc->realtime(rt);
+    g_feedOverride += (int)detents;
+    if (g_feedOverride < 10)  g_feedOverride = 10;
+    if (g_feedOverride > 200) g_feedOverride = 200;
+    drawJogReadout();
     return;
   }
 
