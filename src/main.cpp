@@ -5,7 +5,9 @@
 #include <LittleFS.h>
 #include <SimpleFTPServer.h>
 #include <WebServer.h>
-#include <ElegantOTA.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <WiFiClientSecure.h>
 #ifdef USE_CH341_TRANSPORT
 #include <EspUsbHost.h>
 #endif
@@ -888,15 +890,79 @@ static void onHttpUpload() {
   }
 }
 
+// URL of the latest firmware binary in the public repo. HTTPS via
+// insecure NetworkClientSecure (no cert bundle) — we're on the user's
+// home LAN and this is public firmware anyway.
+static const char* FIRMWARE_URL =
+    "https://raw.githubusercontent.com/jonphoton/cubiko-pendant/main/firmware/firmware.bin";
+
+static const char UPDATE_HTML[] PROGMEM = R"HTML(<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Update firmware</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+max-width:520px;margin:2.5rem auto;padding:0 1rem;line-height:1.5;color:#eee;
+background:#181818}
+h1{font-weight:600}
+button{background:#0a7d2e;color:#fff;border:0;padding:.7rem 1.4rem;
+border-radius:8px;font-size:1rem;cursor:pointer}
+button:disabled{background:#333;color:#888;cursor:wait}
+pre{background:#111;color:#0d0;padding:.8rem;border-radius:8px;min-height:2rem;
+font-family:'SF Mono',Menlo,monospace;font-size:11pt;white-space:pre-wrap}
+a{color:#4bd}
+</style></head><body>
+<h1>Update firmware</h1>
+<p>Pull the latest <code>firmware.bin</code> straight from
+<a href="https://github.com/jonphoton/cubiko-pendant">the public repo</a>
+and apply it. WiFi credentials are preserved.</p>
+<button id="go">Update now</button>
+<pre id="log"></pre>
+<p style="text-align:center;font-size:11pt;color:#666"><a href="/">back to drop UI</a></p>
+<script>
+document.getElementById('go').onclick=async function(){
+  this.disabled=true;this.textContent='Updating...';
+  const log=document.getElementById('log');
+  log.textContent='Downloading + flashing (~15-30s)...';
+  try{
+    const r=await fetch('/update',{method:'POST'});
+    const t=await r.text();
+    log.textContent=t;
+    if(r.ok){log.textContent+='\nReboot in progress. This page will time out.';}
+  }catch(e){log.textContent='Error: '+e.message;}
+};
+</script></body></html>)HTML";
+
+static void onGetUpdate() {
+  g_http.send_P(200, "text/html; charset=utf-8", UPDATE_HTML);
+}
+
+static void onPostUpdate() {
+  WiFiClientSecure client;
+  client.setInsecure();
+  httpUpdate.rebootOnUpdate(false);
+  const t_httpUpdate_return ret = httpUpdate.update(client, FIRMWARE_URL);
+  if (ret == HTTP_UPDATE_OK) {
+    g_http.send(200, "text/plain", "Update OK. Rebooting.");
+    delay(500);
+    ESP.restart();
+  } else if (ret == HTTP_UPDATE_NO_UPDATES) {
+    g_http.send(200, "text/plain", "Already up to date.");
+  } else {
+    String msg = "Failed: ";
+    msg += httpUpdate.getLastErrorString();
+    g_http.send(500, "text/plain", msg);
+  }
+}
+
 static void setupHttp() {
   if (!g_wifiConnected) return;
   g_http.on("/", HTTP_GET, onHttpRoot);
   g_http.on("/upload", HTTP_POST,
             [](){ g_http.send(200, "text/plain", "ok"); },
             onHttpUpload);
-  // ElegantOTA mounts a firmware-update page at /update. Uses the
-  // second app slot so an interrupted upload doesn't brick the pendant.
-  ElegantOTA.begin(&g_http);
+  g_http.on("/update", HTTP_GET,  onGetUpdate);
+  g_http.on("/update", HTTP_POST, onPostUpdate);
   g_http.begin();
 }
 
@@ -927,7 +993,6 @@ void loop() {
   if (g_wifiConnected) {
     g_ftp.handleFTP();
     g_http.handleClient();
-    ElegantOTA.loop();
   }
 
   if (g_uploadDone) {
