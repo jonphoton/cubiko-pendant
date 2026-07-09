@@ -9,6 +9,7 @@
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
+#include <vector>
 #ifdef USE_CH341_TRANSPORT
 #include <EspUsbHost.h>
 #endif
@@ -522,6 +523,23 @@ static void drawAll() {
 // ---------------------------------------------------------------
 // Job control
 // ---------------------------------------------------------------
+// Every new upload replaces whatever was there before — only the
+// most recent G-code file survives on LittleFS, so the ~4.5 MB
+// filesystem never fills up over time. Called after loadJob(new).
+static void deleteAllExcept(const String& keepPath) {
+  File root = LittleFS.open("/");
+  if (!root || !root.isDirectory()) return;
+  std::vector<String> toRm;
+  for (File f = root.openNextFile(); f; f = root.openNextFile()) {
+    if (f.isDirectory()) continue;
+    String n = f.name();
+    if (!n.startsWith("/")) n = "/" + n;
+    if (n != keepPath) toRm.push_back(n);
+  }
+  root.close();
+  for (const auto& n : toRm) LittleFS.remove(n);
+}
+
 static void loadJob(const String& path) {
   if (g_jobFile) g_jobFile.close();
   g_jobFile = LittleFS.open(path.c_str(), "r");
@@ -1179,6 +1197,7 @@ void loop() {
         g_jobState == JobState::Loaded ||
         g_jobState == JobState::Done) {
       loadJob(g_uploadedPath);
+      deleteAllExcept(g_uploadedPath);   // one file survives per upload
       drawAll();
     }
   }
