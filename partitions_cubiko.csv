@@ -1,9 +1,11 @@
-# Custom partitions for the M5Dial (8 MB flash). No OTA — we flash over USB.
-# 3 MB app leaves headroom for USB host stack + WiFi + UI + FTP server.
-# ~4.9 MB LittleFS for uploaded G-code files.
+# Custom partitions for the M5Dial (8 MB flash) with OTA A/B.
+# 1.7 MB per app slot (current firmware is ~1.5 MB), ~4.5 MB LittleFS.
+# ElegantOTA writes to the inactive slot then otadata swaps the boot
+# target, so an update never bricks a working firmware.
 # Name,    Type, SubType,  Offset,   Size,     Flags
 nvs,       data, nvs,      0x9000,   0x5000,
 otadata,   data, ota,      0xE000,   0x2000,
-app0,      app,  ota_0,    0x10000,  0x300000,
-spiffs,    data, spiffs,   0x310000, 0x4E0000,
+app0,      app,  ota_0,    0x10000,  0x1B0000,
+app1,      app,  ota_1,    0x1C0000, 0x1B0000,
+spiffs,    data, spiffs,   0x370000, 0x480000,
 coredump,  data, coredump, 0x7F0000, 0x10000,

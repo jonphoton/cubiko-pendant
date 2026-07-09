@@ -5,6 +5,7 @@
 #include <LittleFS.h>
 #include <SimpleFTPServer.h>
 #include <WebServer.h>
+#include <ElegantOTA.h>
 #ifdef USE_CH341_TRANSPORT
 #include <EspUsbHost.h>
 #endif
@@ -839,7 +840,9 @@ Press play on the pendant to run.</p>
 <button class="btn" id="pick">Pick files</button></div>
 <input type="file" id="file" multiple>
 <pre id="log"></pre>
-<p style="text-align:center;font-size:11pt;color:#666"><a href="https://github.com/jonphoton/cubiko-pendant">github.com/jonphoton/cubiko-pendant</a></p>
+<p style="text-align:center;font-size:11pt;color:#666">
+<a href="/update">Update firmware</a> &middot;
+<a href="https://github.com/jonphoton/cubiko-pendant">github.com/jonphoton/cubiko-pendant</a></p>
 <script>
 const drop=document.getElementById('drop'),file=document.getElementById('file'),
 pick=document.getElementById('pick'),log=document.getElementById('log');
@@ -891,6 +894,9 @@ static void setupHttp() {
   g_http.on("/upload", HTTP_POST,
             [](){ g_http.send(200, "text/plain", "ok"); },
             onHttpUpload);
+  // ElegantOTA mounts a firmware-update page at /update. Uses the
+  // second app slot so an interrupted upload doesn't brick the pendant.
+  ElegantOTA.begin(&g_http);
   g_http.begin();
 }
 
@@ -921,6 +927,7 @@ void loop() {
   if (g_wifiConnected) {
     g_ftp.handleFTP();
     g_http.handleClient();
+    ElegantOTA.loop();
   }
 
   if (g_uploadDone) {
