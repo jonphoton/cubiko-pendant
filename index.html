@@ -81,5 +81,12 @@
     onto the page. The pendant serves its own drag-and-drop UI, so there's
     nothing to install on the computer.
   </p>
+  <p style="font-size:0.9rem;color:#666">
+    <strong>If it doesn't load in Chrome, try Safari.</strong> Chrome silently
+    rewrites <code>cubiko.local</code> to <code>https://</code> or routes DNS
+    through its own DoH resolver that can't see <code>.local</code> names — the
+    pendant is fine, Chrome is just being too clever. Safari uses Bonjour and
+    the URL as-typed, so it Just Works.
+  </p>
 </body>
 </html>
