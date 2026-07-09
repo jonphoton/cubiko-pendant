@@ -8,6 +8,7 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
+#include <Preferences.h>
 #ifdef USE_CH341_TRANSPORT
 #include <EspUsbHost.h>
 #endif
@@ -52,6 +53,9 @@ static const char* const CALIBRATE_LINES[] = {
 };
 static constexpr int CAL_LINE_COUNT =
     sizeof(CALIBRATE_LINES) / sizeof(CALIBRATE_LINES[0]);
+// Index of "G10 L20 P1 Z0" — substituted with the current probeZOff
+// each time the calibrate sequence runs.
+static constexpr int CAL_IDX_SET_Z = 6;
 
 // ---------------------------------------------------------------
 // Layout (240x240 round)
@@ -65,23 +69,28 @@ static constexpr int CHIP_W    = 46;
 static constexpr int CHIP_H    = 28;
 static constexpr int CHIP_GAP  = 6;
 
-// CAL + UNL sit side by side, centred as a pair.
-static constexpr int CAL_W     = 46;
-static constexpr int CAL_H     = 20;
-static constexpr int CAL_Y     = 92;
-static constexpr int MINI_GAP  = 6;
-static constexpr int CAL_X     = CENTER - CAL_W - MINI_GAP / 2;
-static constexpr int UNL_W     = CAL_W;
-static constexpr int UNL_H     = CAL_H;
-static constexpr int UNL_Y     = CAL_Y;
-static constexpr int UNL_X     = CENTER + MINI_GAP / 2;
+// Single MENU button replaces the old CAL + UNL pair; opens the
+// secondary screen with CAL / UNL / ProbeZ / Return rows.
+static constexpr int MENU_BTN_W = 66;
+static constexpr int MENU_BTN_H = 22;
+static constexpr int MENU_BTN_Y = 92;
+static constexpr int MENU_BTN_X = CENTER - MENU_BTN_W / 2;
 
 static constexpr int STATUS_Y  = 120;
 
 static constexpr int BTN_CY    = 152;
-static constexpr int BTN_R     = 18;
-static constexpr int STOP_CX   = 45;
-static constexpr int PLAY_CX   = 195;
+static constexpr int BTN_R     = 22;                 // was 18 — bigger
+static constexpr int STOP_CX   = 42;
+static constexpr int PLAY_CX   = 198;
+
+// Menu screen layout — 4 rows of 32-tall buttons, 170 wide.
+static constexpr int MENU_ROW_W   = 170;
+static constexpr int MENU_ROW_H   = 32;
+static constexpr int MENU_ROW_X   = CENTER - MENU_ROW_W / 2;
+static constexpr int MENU_CAL_Y   = 45;
+static constexpr int MENU_UNL_Y   = 87;
+static constexpr int MENU_PROBE_Y = 129;
+static constexpr int MENU_RET_Y   = 171;
 
 static constexpr int JOG_Y     = 188;
 static constexpr int FTP_Y     = 213;
@@ -105,6 +114,12 @@ static Axis     g_axis        = Axis::X;
 static Speed    g_speed       = Speed::Medium;
 static long     g_lastEncoder = 0;
 static float    g_jogAccumMm  = 0.0f;
+static bool     g_inMenu      = false;
+// Adjustment applied to the calibrate G10 L20 P1 Z line: if the probe
+// button sits below the workpiece surface by this many mm, we set
+// work-Z to -offset at the touch point so Z=0 lands at the surface.
+// Persisted to NVS via Preferences.
+static float    g_probeZOff   = 0.0f;
 
 // Work-coordinate readout parsed from grbl `?` status reports.
 // g_wcoOffset is cached (grbl only sends WCO periodically); g_workPos
@@ -119,8 +134,9 @@ static int      g_feedOverride = 100;
 static uint32_t g_lastStatusMs = 0;
 static constexpr uint32_t STATUS_INTERVAL_MS = 200;
 
-static FtpServer g_ftp;
-static WebServer g_http(80);
+static FtpServer   g_ftp;
+static WebServer   g_http(80);
+static Preferences g_prefs;
 static bool      g_wifiConnected = false;
 static String    g_ipStr;
 
@@ -271,29 +287,15 @@ static void drawChip(int x, int y, int w, int h, const char* label,
   M5Dial.Display.drawString(label, x + w / 2, y + h / 2);
 }
 
-static void drawCal() {
-  uint16_t bg, fg;
-  if (g_calibrating)        { bg = TFT_ORANGE; fg = TFT_BLACK; }
-  else if (calEnabled())    { bg = 0x033F;     fg = TFT_WHITE; }
-  else                      { bg = 0x18E3;     fg = 0x7BEF;    }
-  M5Dial.Display.fillRoundRect(CAL_X, CAL_Y, CAL_W, CAL_H, 4, bg);
-  M5Dial.Display.setTextColor(fg, bg);
+static void drawMenuButton() {
+  const uint16_t bg = 0x39E7;
+  M5Dial.Display.fillRoundRect(MENU_BTN_X, MENU_BTN_Y, MENU_BTN_W, MENU_BTN_H, 4, bg);
+  M5Dial.Display.setTextColor(TFT_WHITE, bg);
   M5Dial.Display.setTextDatum(middle_center);
   M5Dial.Display.setTextSize(1);
-  M5Dial.Display.drawString("CAL", CAL_X + CAL_W / 2, CAL_Y + CAL_H / 2);
-}
-
-static void drawUnl() {
-  // Green $X unlock button, right of CAL. Only enabled when the CNC is
-  // actually there to accept the command.
-  const bool armed = g_cnc->connected();
-  const uint16_t bg = armed ? 0x0500 : 0x18E3;   // dark green / disabled
-  const uint16_t fg = armed ? TFT_WHITE : 0x7BEF;
-  M5Dial.Display.fillRoundRect(UNL_X, UNL_Y, UNL_W, UNL_H, 4, bg);
-  M5Dial.Display.setTextColor(fg, bg);
-  M5Dial.Display.setTextDatum(middle_center);
-  M5Dial.Display.setTextSize(1);
-  M5Dial.Display.drawString("UNL", UNL_X + UNL_W / 2, UNL_Y + UNL_H / 2);
+  M5Dial.Display.drawString("MENU",
+                            MENU_BTN_X + MENU_BTN_W / 2,
+                            MENU_BTN_Y + MENU_BTN_H / 2);
 }
 
 static void drawStopButton() {
@@ -339,8 +341,7 @@ static void drawJobStatus() {
   }
   switch (g_jobState) {
     case JobState::Idle:
-      M5Dial.Display.setTextColor(0x7BEF, TFT_BLACK);
-      M5Dial.Display.drawString("JOG MODE", CENTER, STATUS_Y);
+      // No text — save real estate. Line was cleared above.
       break;
     case JobState::Loaded:
       snprintf(buf, sizeof(buf), "RDY %s", g_jobName.c_str());
@@ -404,7 +405,7 @@ static void drawFtpStatus() {
   M5Dial.Display.fillRect(0, FTP_Y - 5, SCREEN, 10, TFT_BLACK);
   M5Dial.Display.setTextDatum(middle_center);
   M5Dial.Display.setTextSize(1);
-  String s = g_wifiConnected ? String("FTP ") + g_ipStr : String("offline");
+  String s = g_wifiConnected ? String("cubiko.local") : String("offline");
   const uint16_t fg = g_wifiConnected ? TFT_GREEN : 0x7BEF;
   M5Dial.Display.setTextColor(fg, TFT_BLACK);
   M5Dial.Display.drawString(s.c_str(), CENTER, FTP_Y);
@@ -414,7 +415,48 @@ static void drawFtpStatus() {
   M5Dial.Display.fillCircle(dotX, FTP_Y, 3, dotColor);
 }
 
-static void drawAll() {
+static void saveProbeZOff() { g_prefs.putFloat("probeZOff", g_probeZOff); }
+
+static void drawMenu() {
+  M5Dial.Display.fillScreen(TFT_BLACK);
+
+  // CAL row
+  const bool calArm = calEnabled();
+  const uint16_t calBg = calArm ? 0x033F : 0x18E3;
+  const uint16_t calFg = calArm ? TFT_WHITE : 0x7BEF;
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_CAL_Y, MENU_ROW_W, MENU_ROW_H, 6, calBg);
+  M5Dial.Display.setTextColor(calFg, calBg);
+  M5Dial.Display.setTextDatum(middle_center);
+  M5Dial.Display.setTextSize(2);
+  M5Dial.Display.drawString("CAL", CENTER, MENU_CAL_Y + MENU_ROW_H / 2);
+
+  // UNL row
+  const bool unlArm = g_cnc->connected();
+  const uint16_t unlBg = unlArm ? 0x0500 : 0x18E3;
+  const uint16_t unlFg = unlArm ? TFT_WHITE : 0x7BEF;
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_UNL_Y, MENU_ROW_W, MENU_ROW_H, 6, unlBg);
+  M5Dial.Display.setTextColor(unlFg, unlBg);
+  M5Dial.Display.drawString("UNL", CENTER, MENU_UNL_Y + MENU_ROW_H / 2);
+
+  // ProbeZ row: label on the left, value on the right, encoder adjusts.
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_PROBE_Y, MENU_ROW_W, MENU_ROW_H, 6, 0x39E7);
+  M5Dial.Display.setTextColor(TFT_WHITE, 0x39E7);
+  M5Dial.Display.setTextDatum(middle_left);
+  M5Dial.Display.setTextSize(2);
+  M5Dial.Display.drawString("ProbeZ", MENU_ROW_X + 10, MENU_PROBE_Y + MENU_ROW_H / 2);
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%+.2f", g_probeZOff);
+  M5Dial.Display.setTextDatum(middle_right);
+  M5Dial.Display.drawString(buf, MENU_ROW_X + MENU_ROW_W - 10, MENU_PROBE_Y + MENU_ROW_H / 2);
+
+  // Return
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_RET_Y, MENU_ROW_W, MENU_ROW_H, 6, 0x6000);
+  M5Dial.Display.setTextColor(TFT_WHITE, 0x6000);
+  M5Dial.Display.setTextDatum(middle_center);
+  M5Dial.Display.drawString("Return", CENTER, MENU_RET_Y + MENU_ROW_H / 2);
+}
+
+static void drawMain() {
   M5Dial.Display.fillScreen(TFT_BLACK);
   for (int i = 0; i < 3; i++) {
     drawChip(chipX(i), AXIS_Y,  CHIP_W, CHIP_H, AXIS_LABELS[i],
@@ -422,12 +464,16 @@ static void drawAll() {
     drawChip(chipX(i), SPEED_Y, CHIP_W, CHIP_H, SPEED_LABELS[i],
              i == (int)g_speed, 1);
   }
-  drawCal();
-  drawUnl();
+  drawMenuButton();
   drawJobStatus();
   drawCenter();
   drawJogReadout();
   drawFtpStatus();
+}
+
+static void drawAll() {
+  if (g_inMenu) drawMenu();
+  else          drawMain();
 }
 
 // ---------------------------------------------------------------
@@ -582,7 +628,17 @@ static void streamerTick() {
       drawAll();
       return;
     }
-    g_cnc->writeLine(String(CALIBRATE_LINES[g_calibrateIdx]) + "\n");
+    String line;
+    if (g_calibrateIdx == CAL_IDX_SET_Z) {
+      // Displace Z=0 upwards by g_probeZOff: at the probe touch point,
+      // work-Z should read -offset so plate height reads 0.
+      char buf[32];
+      snprintf(buf, sizeof(buf), "G10 L20 P1 Z%.3f", -g_probeZOff);
+      line = buf;
+    } else {
+      line = CALIBRATE_LINES[g_calibrateIdx];
+    }
+    g_cnc->writeLine(line + "\n");
     g_calibrateIdx++;
     g_waitingForOk = true;
     drawJobStatus();
@@ -616,7 +672,29 @@ static bool hitCircle(int tx, int ty, int cx, int cy, int r) {
   return dx * dx + dy * dy <= r * r;
 }
 
+static void handleMenuTouch() {
+  if (M5Dial.Touch.getCount() == 0) return;
+  auto t = M5Dial.Touch.getDetail();
+  if (!t.wasPressed()) return;
+  if (t.x < MENU_ROW_X || t.x >= MENU_ROW_X + MENU_ROW_W) return;
+  bool leaveMenu = false;
+  if (t.y >= MENU_CAL_Y && t.y < MENU_CAL_Y + MENU_ROW_H) {
+    if (calEnabled()) { onCalibrate(); leaveMenu = true; }
+  } else if (t.y >= MENU_UNL_Y && t.y < MENU_UNL_Y + MENU_ROW_H) {
+    if (g_cnc->connected()) { onUnlock(); leaveMenu = true; }
+  } else if (t.y >= MENU_RET_Y && t.y < MENU_RET_Y + MENU_ROW_H) {
+    leaveMenu = true;
+  }
+  // ProbeZ row: tap doesn't do anything — encoder adjusts the value.
+  if (leaveMenu) {
+    g_inMenu = false;
+    saveProbeZOff();
+    drawAll();
+  }
+}
+
 static void handleTouch() {
+  if (g_inMenu) { handleMenuTouch(); return; }
   // Finger lifted: finalise any axis-chip hold tracking.
   if (M5Dial.Touch.getCount() == 0) {
     if (g_heldAxisIdx >= 0) {
@@ -653,11 +731,10 @@ static void handleTouch() {
         return;
       }
     }
-    if (hitRect(t.x, t.y, CAL_X - 4, CAL_Y - 4, CAL_W + 8, CAL_H + 8)) {
-      onCalibrate();  drawAll(); return;
-    }
-    if (hitRect(t.x, t.y, UNL_X - 4, UNL_Y - 4, UNL_W + 8, UNL_H + 8)) {
-      onUnlock();     drawAll(); return;
+    if (hitRect(t.x, t.y,
+                MENU_BTN_X - 4, MENU_BTN_Y - 4,
+                MENU_BTN_W + 8, MENU_BTN_H + 8)) {
+      g_inMenu = true; drawAll(); return;
     }
     if (hitCircle(t.x, t.y, STOP_CX, BTN_CY, BTN_R + 4)) {
       onStop();       drawAll(); return;
@@ -695,6 +772,12 @@ static void handleEncoder() {
   const long detents  = delta_raw / ENC_COUNTS_PER_DETENT;
   if (detents == 0) return;
   g_lastEncoder += detents * ENC_COUNTS_PER_DETENT;
+
+  if (g_inMenu) {
+    g_probeZOff += detents * 0.1f;
+    drawMenu();
+    return;
+  }
 
   // Calibration: consume detents, do nothing.
   if (g_calibrating) return;
@@ -977,6 +1060,8 @@ void setup() {
   M5Dial.Speaker.setVolume(130);                 // audible without being tinny
 
   g_cnc->begin();
+  g_prefs.begin("cubiko", false);
+  g_probeZOff = g_prefs.getFloat("probeZOff", 0.0f);
   setupWifi();
   setupFtp();
   setupHttp();
