@@ -534,9 +534,12 @@ static void loadJob(const String& path) {
   g_jobState = JobState::Loaded;
 }
 
+static void ensureSpindleOff();
+
 static void onPlay() {
   if (!playEnabled()) return;
   if (g_jobState == JobState::Loaded) {
+    ensureSpindleOff();                         // let the file's M3 own it
     g_feedOverride = 100;                       // fresh start at 100%
     g_cnc->realtime(0x90);                      // grbl feed override reset
     g_jobState = JobState::Playing;
@@ -549,6 +552,7 @@ static void onPlay() {
   } else if (g_jobState == JobState::Done) {
     // Re-arm the same file and play it again.
     if (g_jobPath.length()) {
+      ensureSpindleOff();
       loadJob(g_jobPath);
       g_feedOverride = 100;
       g_cnc->realtime(0x90);
@@ -589,8 +593,18 @@ static void zeroAxis(int axisIdx) {
   g_jogAccumMm = 0.0f;
 }
 
+// Never start a fresh cycle with the bit spinning — home / probe /
+// job all assume the spindle is off unless the G-code turns it on.
+static void ensureSpindleOff() {
+  if (g_spindleOn) {
+    g_cnc->writeLine("M5\n");
+    g_spindleOn = false;
+  }
+}
+
 static void onCalibrate() {
   if (!calEnabled()) return;
+  ensureSpindleOff();
   g_calibrating  = true;
   g_calibrateIdx = 0;
   g_waitingForOk = false;
