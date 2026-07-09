@@ -88,14 +88,15 @@ static constexpr int BTN_R     = 22;                 // was 18 — bigger
 static constexpr int STOP_CX   = 42;
 static constexpr int PLAY_CX   = 198;
 
-// Menu screen layout — 4 rows of 32-tall buttons, 170 wide.
-static constexpr int MENU_ROW_W   = 170;
-static constexpr int MENU_ROW_H   = 32;
-static constexpr int MENU_ROW_X   = CENTER - MENU_ROW_W / 2;
-static constexpr int MENU_CAL_Y   = 45;
-static constexpr int MENU_UNL_Y   = 87;
-static constexpr int MENU_PROBE_Y = 129;
-static constexpr int MENU_RET_Y   = 171;
+// Menu screen layout — 5 rows of 28-tall buttons, 170 wide.
+static constexpr int MENU_ROW_W     = 170;
+static constexpr int MENU_ROW_H     = 28;
+static constexpr int MENU_ROW_X     = CENTER - MENU_ROW_W / 2;
+static constexpr int MENU_CAL_Y     = 40;
+static constexpr int MENU_UNL_Y     = 72;
+static constexpr int MENU_SPINDLE_Y = 104;
+static constexpr int MENU_PROBE_Y   = 136;
+static constexpr int MENU_RET_Y     = 168;
 
 static constexpr int JOG_Y     = 188;
 static constexpr int FTP_Y     = 213;
@@ -121,6 +122,11 @@ static long     g_lastEncoder = 0;
 static float    g_jogAccumMm  = 0.0f;
 static bool     g_inMenu       = false;
 static bool     g_probeZFocused = false;         // tap ProbeZ to grab the wheel
+static bool     g_spindleOn    = false;          // NOT persisted — always off at boot
+static int      g_spindleRpm   = 7000;
+static constexpr int SPINDLE_RPM_STEP = 100;
+static constexpr int SPINDLE_RPM_MIN  = 0;
+static constexpr int SPINDLE_RPM_MAX  = 25000;
 // Adjustment applied to the calibrate G10 L20 P1 Z line: if the probe
 // button sits below the workpiece surface by this many mm, we set
 // work-Z to -offset at the touch point so Z=0 lands at the surface.
@@ -423,7 +429,14 @@ static void drawFtpStatus() {
   M5Dial.Display.fillCircle(dotX, FTP_Y, 3, dotColor);
 }
 
-static void saveProbeZOff() { g_prefs.putFloat("probeZOff", g_probeZOff); }
+static void saveProbeZOff()    { g_prefs.putFloat("probeZOff", g_probeZOff); }
+static void saveSpindleRpm()   { g_prefs.putInt("spRpm", g_spindleRpm); }
+
+static bool spindleAllowed() {
+  return g_jobState != JobState::Playing &&
+         g_jobState != JobState::Paused  &&
+         !g_calibrating;
+}
 
 static void drawMenu() {
   M5Dial.Display.fillScreen(TFT_BLACK);
@@ -445,6 +458,26 @@ static void drawMenu() {
   M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_UNL_Y, MENU_ROW_W, MENU_ROW_H, 6, unlBg);
   M5Dial.Display.setTextColor(unlFg, unlBg);
   M5Dial.Display.drawString("Unlock", CENTER, MENU_UNL_Y + MENU_ROW_H / 2);
+
+  // Spindle row: tap toggles on/off (M3 S<rpm> / M5). When on, the
+  // wheel adjusts RPM and the row is highlighted orange.
+  const bool spOk = spindleAllowed();
+  uint16_t spBg, spFg;
+  if (!spOk)             { spBg = 0x18E3;     spFg = 0x7BEF; }
+  else if (g_spindleOn)  { spBg = TFT_ORANGE; spFg = TFT_BLACK; }
+  else                   { spBg = 0x39E7;     spFg = TFT_WHITE; }
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_SPINDLE_Y, MENU_ROW_W, MENU_ROW_H, 6, spBg);
+  M5Dial.Display.setTextColor(spFg, spBg);
+  M5Dial.Display.setTextDatum(middle_left);
+  M5Dial.Display.setTextSize(2);
+  M5Dial.Display.drawString("Spindle", MENU_ROW_X + 10, MENU_SPINDLE_Y + MENU_ROW_H / 2);
+  char spBuf[16];
+  if (g_spindleOn) snprintf(spBuf, sizeof(spBuf), "%d", g_spindleRpm);
+  else             strcpy(spBuf, "OFF");
+  M5Dial.Display.setTextDatum(middle_right);
+  M5Dial.Display.drawString(spBuf,
+                            MENU_ROW_X + MENU_ROW_W - 10,
+                            MENU_SPINDLE_Y + MENU_ROW_H / 2);
 
   // ProbeZ row: tap to grab the wheel (highlighted); tap again to release.
   const uint16_t pzBg = g_probeZFocused ? TFT_ORANGE : 0x39E7;
@@ -693,6 +726,20 @@ static void handleMenuTouch() {
     if (calEnabled()) { onCalibrate(); leaveMenu = true; }
   } else if (t.y >= MENU_UNL_Y && t.y < MENU_UNL_Y + MENU_ROW_H) {
     if (g_cnc->connected()) { onUnlock(); leaveMenu = true; }
+  } else if (t.y >= MENU_SPINDLE_Y && t.y < MENU_SPINDLE_Y + MENU_ROW_H) {
+    if (spindleAllowed()) {
+      g_spindleOn = !g_spindleOn;
+      if (g_spindleOn) {
+        // Turning on takes the wheel — release any ProbeZ focus.
+        g_probeZFocused = false;
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "M3 S%d\n", g_spindleRpm);
+        g_cnc->writeLine(cmd);
+      } else {
+        g_cnc->writeLine("M5\n");
+      }
+      redraw = true;
+    }
   } else if (t.y >= MENU_PROBE_Y && t.y < MENU_PROBE_Y + MENU_ROW_H) {
     // Toggle wheel focus onto the ProbeZ value.
     g_probeZFocused = !g_probeZFocused;
@@ -704,6 +751,7 @@ static void handleMenuTouch() {
     g_inMenu = false;
     g_probeZFocused = false;
     saveProbeZOff();
+    saveSpindleRpm();
     drawAll();
   } else if (redraw) {
     drawMenu();
@@ -791,7 +839,16 @@ static void handleEncoder() {
   g_lastEncoder += detents * ENC_COUNTS_PER_DETENT;
 
   if (g_inMenu) {
-    if (g_probeZFocused) {
+    if (g_spindleOn) {
+      // Spindle owns the wheel while running: send updated S value.
+      g_spindleRpm += (int)detents * SPINDLE_RPM_STEP;
+      if (g_spindleRpm < SPINDLE_RPM_MIN) g_spindleRpm = SPINDLE_RPM_MIN;
+      if (g_spindleRpm > SPINDLE_RPM_MAX) g_spindleRpm = SPINDLE_RPM_MAX;
+      char cmd[24];
+      snprintf(cmd, sizeof(cmd), "S%d\n", g_spindleRpm);
+      g_cnc->writeLine(cmd);
+      drawMenu();
+    } else if (g_probeZFocused) {
       g_probeZOff += detents * 0.1f;
       drawMenu();
     }
@@ -1080,7 +1137,8 @@ void setup() {
 
   g_cnc->begin();
   g_prefs.begin("cubiko", false);
-  g_probeZOff = g_prefs.getFloat("probeZOff", 0.0f);
+  g_probeZOff  = g_prefs.getFloat("probeZOff", 0.0f);
+  g_spindleRpm = g_prefs.getInt("spRpm", 7000);
   setupWifi();
   setupFtp();
   setupHttp();
