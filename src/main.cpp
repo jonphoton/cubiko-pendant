@@ -40,22 +40,27 @@ static const char* FTP_PASS = "cubiko";
 // Homes, rapids over the sensor, probes down, zeroes work Z at the
 // contact point, retracts. After this the tool tip sits at work Z=0
 // when it touches the sensor — offset your workpiece Z separately.
+// Two-stage probing (grbl best practice): fast coarse approach then
+// a slow precise probe, so total time is short without giving up
+// contact accuracy at the touch point.
 static const char* const CALIBRATE_LINES[] = {
-  "$H",                  // home all axes
-  "G21",                 // mm units
-  "G90",                 // absolute
-  "G53 G0 X149 Y110",    // rapid to sensor XY in machine coords
-  "G91",                 // relative
-  "G38.2 Z-50 F100",     // probe down up to 50mm @ 100mm/min
-  "G10 L20 P1 Z0",       // work Z = 0 at contact
-  "G0 Z10",              // retract 10mm
-  "G90",                 // absolute
+  "$H",                  // 0 home all axes
+  "G21",                 // 1 mm units
+  "G90",                 // 2 absolute
+  "G53 G0 X149 Y110",    // 3 rapid to sensor XY in machine coords
+  "G91",                 // 4 relative
+  "G38.2 Z-50 F200",     // 5 fast probe (2x previous feed)
+  "G0 Z2",               // 6 back off 2mm
+  "G38.2 Z-3 F50",       // 7 slow precise probe (half previous feed)
+  "G10 L20 P1 Z0",       // 8 work Z = 0 at contact (see CAL_IDX_SET_Z)
+  "G0 Z10",              // 9 retract 10mm
+  "G90",                 // 10 absolute
 };
 static constexpr int CAL_LINE_COUNT =
     sizeof(CALIBRATE_LINES) / sizeof(CALIBRATE_LINES[0]);
-// Index of "G10 L20 P1 Z0" — substituted with the current probeZOff
+// Index of "G10 L20 P1 Z0" — substituted with G10 L20 P1 Z{-probeZOff}
 // each time the calibrate sequence runs.
-static constexpr int CAL_IDX_SET_Z = 6;
+static constexpr int CAL_IDX_SET_Z = 8;
 
 // ---------------------------------------------------------------
 // Layout (240x240 round)
@@ -341,7 +346,8 @@ static void drawJobStatus() {
   }
   switch (g_jobState) {
     case JobState::Idle:
-      // No text — save real estate. Line was cleared above.
+      M5Dial.Display.setTextColor(0x7BEF, TFT_BLACK);
+      M5Dial.Display.drawString("JOG MODE", CENTER, STATUS_Y);
       break;
     case JobState::Loaded:
       snprintf(buf, sizeof(buf), "RDY %s", g_jobName.c_str());
