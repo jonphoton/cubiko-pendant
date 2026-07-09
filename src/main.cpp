@@ -119,7 +119,8 @@ static Axis     g_axis        = Axis::X;
 static Speed    g_speed       = Speed::Medium;
 static long     g_lastEncoder = 0;
 static float    g_jogAccumMm  = 0.0f;
-static bool     g_inMenu      = false;
+static bool     g_inMenu       = false;
+static bool     g_probeZFocused = false;         // tap ProbeZ to grab the wheel
 // Adjustment applied to the calibrate G10 L20 P1 Z line: if the probe
 // button sits below the workpiece surface by this many mm, we set
 // work-Z to -offset at the touch point so Z=0 lands at the surface.
@@ -384,6 +385,7 @@ static void drawCenter() {
 }
 
 static void drawJogReadout() {
+  if (g_inMenu) return;                           // menu owns the screen
   M5Dial.Display.fillRect(0, JOG_Y - 8, SCREEN, 16, TFT_BLACK);
   M5Dial.Display.setTextDatum(middle_center);
   M5Dial.Display.setTextSize(2);
@@ -442,11 +444,13 @@ static void drawMenu() {
   const uint16_t unlFg = unlArm ? TFT_WHITE : 0x7BEF;
   M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_UNL_Y, MENU_ROW_W, MENU_ROW_H, 6, unlBg);
   M5Dial.Display.setTextColor(unlFg, unlBg);
-  M5Dial.Display.drawString("UNL", CENTER, MENU_UNL_Y + MENU_ROW_H / 2);
+  M5Dial.Display.drawString("Unlock", CENTER, MENU_UNL_Y + MENU_ROW_H / 2);
 
-  // ProbeZ row: label on the left, value on the right, encoder adjusts.
-  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_PROBE_Y, MENU_ROW_W, MENU_ROW_H, 6, 0x39E7);
-  M5Dial.Display.setTextColor(TFT_WHITE, 0x39E7);
+  // ProbeZ row: tap to grab the wheel (highlighted); tap again to release.
+  const uint16_t pzBg = g_probeZFocused ? TFT_ORANGE : 0x39E7;
+  const uint16_t pzFg = g_probeZFocused ? TFT_BLACK  : TFT_WHITE;
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_PROBE_Y, MENU_ROW_W, MENU_ROW_H, 6, pzBg);
+  M5Dial.Display.setTextColor(pzFg, pzBg);
   M5Dial.Display.setTextDatum(middle_left);
   M5Dial.Display.setTextSize(2);
   M5Dial.Display.drawString("ProbeZ", MENU_ROW_X + 10, MENU_PROBE_Y + MENU_ROW_H / 2);
@@ -684,18 +688,25 @@ static void handleMenuTouch() {
   if (!t.wasPressed()) return;
   if (t.x < MENU_ROW_X || t.x >= MENU_ROW_X + MENU_ROW_W) return;
   bool leaveMenu = false;
+  bool redraw    = false;
   if (t.y >= MENU_CAL_Y && t.y < MENU_CAL_Y + MENU_ROW_H) {
     if (calEnabled()) { onCalibrate(); leaveMenu = true; }
   } else if (t.y >= MENU_UNL_Y && t.y < MENU_UNL_Y + MENU_ROW_H) {
     if (g_cnc->connected()) { onUnlock(); leaveMenu = true; }
+  } else if (t.y >= MENU_PROBE_Y && t.y < MENU_PROBE_Y + MENU_ROW_H) {
+    // Toggle wheel focus onto the ProbeZ value.
+    g_probeZFocused = !g_probeZFocused;
+    redraw = true;
   } else if (t.y >= MENU_RET_Y && t.y < MENU_RET_Y + MENU_ROW_H) {
     leaveMenu = true;
   }
-  // ProbeZ row: tap doesn't do anything — encoder adjusts the value.
   if (leaveMenu) {
     g_inMenu = false;
+    g_probeZFocused = false;
     saveProbeZOff();
     drawAll();
+  } else if (redraw) {
+    drawMenu();
   }
 }
 
@@ -780,8 +791,10 @@ static void handleEncoder() {
   g_lastEncoder += detents * ENC_COUNTS_PER_DETENT;
 
   if (g_inMenu) {
-    g_probeZOff += detents * 0.1f;
-    drawMenu();
+    if (g_probeZFocused) {
+      g_probeZOff += detents * 0.1f;
+      drawMenu();
+    }
     return;
   }
 
