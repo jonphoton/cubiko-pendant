@@ -73,8 +73,11 @@ static constexpr int CENTER = SCREEN / 2;
 static constexpr int HEADER_Y  = 28;             // text center-y
 static constexpr int AXIS_Y    = 40;             // was 28
 static constexpr int SPEED_Y   = 76;             // was 60
-static constexpr int CHIP_W       = 54;          // axis chips (single letter)
-static constexpr int SPEED_CHIP_W = 68;          // speed chips (4-char label)
+// Axis chips are much narrower — one letter — vs speed chips which
+// carry a 4-char label. The size difference is intentional and helps
+// tell the two rows apart at a glance.
+static constexpr int CHIP_W       = 44;          // axis chips (single letter)
+static constexpr int SPEED_CHIP_W = 70;          // speed chips (4-char label)
 static constexpr int CHIP_H       = 32;
 static constexpr int CHIP_GAP     = 6;
 
