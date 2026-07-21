@@ -73,9 +73,10 @@ static constexpr int CENTER = SCREEN / 2;
 static constexpr int HEADER_Y  = 28;             // text center-y
 static constexpr int AXIS_Y    = 40;             // was 28
 static constexpr int SPEED_Y   = 76;             // was 60
-static constexpr int CHIP_W    = 54;             // was 46
-static constexpr int CHIP_H    = 32;             // was 28
-static constexpr int CHIP_GAP  = 6;
+static constexpr int CHIP_W       = 54;          // axis chips (single letter)
+static constexpr int SPEED_CHIP_W = 68;          // speed chips (4-char label)
+static constexpr int CHIP_H       = 32;
+static constexpr int CHIP_GAP     = 6;
 
 // Single MENU button replaces the old CAL + UNL pair; opens the
 // secondary screen with CAL / UNL / ProbeZ / Return rows.
@@ -286,9 +287,9 @@ static bool stopEnabled() {
 // ---------------------------------------------------------------
 // Drawing
 // ---------------------------------------------------------------
-static int chipX(int idx) {
-  const int rowW = 3 * CHIP_W + 2 * CHIP_GAP;
-  return CENTER - rowW / 2 + idx * (CHIP_W + CHIP_GAP);
+static int chipX(int idx, int w = CHIP_W) {
+  const int rowW = 3 * w + 2 * CHIP_GAP;
+  return CENTER - rowW / 2 + idx * (w + CHIP_GAP);
 }
 
 static void drawChip(int x, int y, int w, int h, const char* label,
@@ -498,10 +499,10 @@ static void drawMenu() {
 static void drawMain() {
   M5Dial.Display.fillScreen(TFT_BLACK);
   for (int i = 0; i < 3; i++) {
-    drawChip(chipX(i), AXIS_Y,  CHIP_W, CHIP_H, AXIS_LABELS[i],
-             i == (int)g_axis, 2);
-    drawChip(chipX(i), SPEED_Y, CHIP_W, CHIP_H, SPEED_LABELS[i],
-             i == (int)g_speed, 1);
+    drawChip(chipX(i, CHIP_W),       AXIS_Y,  CHIP_W,       CHIP_H,
+             AXIS_LABELS[i],  i == (int)g_axis,  2);
+    drawChip(chipX(i, SPEED_CHIP_W), SPEED_Y, SPEED_CHIP_W, CHIP_H,
+             SPEED_LABELS[i], i == (int)g_speed, 2);
   }
   drawMenuButton();
   drawJobStatus();
@@ -806,7 +807,7 @@ static void handleTouch() {
     // Axis chips: start hold tracking, beep, defer the action to
     // release (tap = switch axis) or the 1s mark (hold = zero axis).
     for (int i = 0; i < 3; i++) {
-      if (hitRect(t.x, t.y, chipX(i), AXIS_Y, CHIP_W, CHIP_H)) {
+      if (hitRect(t.x, t.y, chipX(i, CHIP_W), AXIS_Y, CHIP_W, CHIP_H)) {
         g_heldAxisIdx   = i;
         g_heldStartMs   = millis();
         g_heldZeroFired = false;
@@ -816,7 +817,7 @@ static void handleTouch() {
     }
     // Speed chips: immediate switch.
     for (int i = 0; i < 3; i++) {
-      if (hitRect(t.x, t.y, chipX(i), SPEED_Y, CHIP_W, CHIP_H) &&
+      if (hitRect(t.x, t.y, chipX(i, SPEED_CHIP_W), SPEED_Y, SPEED_CHIP_W, CHIP_H) &&
           i != (int)g_speed) {
         g_speed = (Speed)i;
         drawAll();
