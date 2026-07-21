@@ -69,20 +69,22 @@ static constexpr int CAL_IDX_SET_Z = 8;
 static constexpr int SCREEN = 240;
 static constexpr int CENTER = SCREEN / 2;
 
-static constexpr int AXIS_Y    = 28;
-static constexpr int SPEED_Y   = 60;
-static constexpr int CHIP_W    = 46;
-static constexpr int CHIP_H    = 28;
+// Axis letter + coord readout at the top; buttons stay at cy=152.
+static constexpr int HEADER_Y  = 28;             // text center-y
+static constexpr int AXIS_Y    = 40;             // was 28
+static constexpr int SPEED_Y   = 76;             // was 60
+static constexpr int CHIP_W    = 54;             // was 46
+static constexpr int CHIP_H    = 32;             // was 28
 static constexpr int CHIP_GAP  = 6;
 
 // Single MENU button replaces the old CAL + UNL pair; opens the
 // secondary screen with CAL / UNL / ProbeZ / Return rows.
-static constexpr int MENU_BTN_W = 66;
-static constexpr int MENU_BTN_H = 22;
-static constexpr int MENU_BTN_Y = 92;
+static constexpr int MENU_BTN_W = 100;           // was 66
+static constexpr int MENU_BTN_H = 26;            // was 22
+static constexpr int MENU_BTN_Y = 114;           // was 92
 static constexpr int MENU_BTN_X = CENTER - MENU_BTN_W / 2;
 
-static constexpr int STATUS_Y  = 120;
+static constexpr int STATUS_Y  = 145;            // was 120 (between menu + buttons)
 
 static constexpr int BTN_CY    = 152;
 static constexpr int BTN_R     = 22;                 // was 18 — bigger
@@ -380,40 +382,33 @@ static void drawJobStatus() {
   }
 }
 
+// The big center X/Y/Z letter is gone (moved into the top header);
+// this now just repaints the stop / play region.
 static void drawCenter() {
   M5Dial.Display.fillRect(0, BTN_CY - BTN_R - 2, SCREEN, 2 * (BTN_R + 2),
                           TFT_BLACK);
-  M5Dial.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5Dial.Display.setTextDatum(middle_center);
-  M5Dial.Display.setTextSize(6);
-  M5Dial.Display.drawString(AXIS_LABELS[(int)g_axis], CENTER, BTN_CY);
   drawStopButton();
   drawPlayButton();
 }
 
-static void drawJogReadout() {
+// Top header: axis letter + coord (idle-ish), FEED n% (running), or
+// nothing during calibration (the status line already shows CAL n/m).
+static void drawHeader() {
   if (g_inMenu) return;                           // menu owns the screen
-  M5Dial.Display.fillRect(0, JOG_Y - 8, SCREEN, 16, TFT_BLACK);
+  M5Dial.Display.fillRect(0, HEADER_Y - 10, SCREEN, 20, TFT_BLACK);
   M5Dial.Display.setTextDatum(middle_center);
   M5Dial.Display.setTextSize(2);
   char buf[32];
   if (g_jobState == JobState::Playing || g_jobState == JobState::Paused) {
-    // During a run the wheel steers feed override — show that instead
-    // of the position (position is on the CNC's own display, and the
-    // number the user is actively controlling is the %).
     M5Dial.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
     snprintf(buf, sizeof(buf), "FEED %d%%", g_feedOverride);
   } else {
     M5Dial.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    if (g_haveWorkPos) {
-      snprintf(buf, sizeof(buf), "%+8.2f mm", g_workPos[(int)g_axis]);
-    } else {
-      // No status from grbl yet (stub transport, disconnected, or
-      // first few ms after boot). Fall back to the jog accumulator.
-      snprintf(buf, sizeof(buf), "%+8.2f mm", g_jogAccumMm);
-    }
+    const float coord = g_haveWorkPos ? g_workPos[(int)g_axis] : g_jogAccumMm;
+    snprintf(buf, sizeof(buf), "%s  %+.2f",
+             AXIS_LABELS[(int)g_axis], coord);
   }
-  M5Dial.Display.drawString(buf, CENTER, JOG_Y);
+  M5Dial.Display.drawString(buf, CENTER, HEADER_Y);
 }
 
 static void drawFtpStatus() {
@@ -511,7 +506,7 @@ static void drawMain() {
   drawMenuButton();
   drawJobStatus();
   drawCenter();
-  drawJogReadout();
+  drawHeader();
   drawFtpStatus();
 }
 
@@ -673,7 +668,7 @@ static void parseStatusLine(const String& s) {
   }
   if (updated) {
     g_haveWorkPos = true;
-    drawJogReadout();
+    drawHeader();
   }
 }
 
@@ -899,13 +894,13 @@ static void handleEncoder() {
     g_feedOverride += (int)detents;
     if (g_feedOverride < 10)  g_feedOverride = 10;
     if (g_feedOverride > 200) g_feedOverride = 200;
-    drawJogReadout();
+    drawHeader();
     return;
   }
 
   const float step_mm = detents * STEP_MM[(int)g_speed];
   g_jogAccumMm  += step_mm;
-  drawJogReadout();
+  drawHeader();
 
   if (!g_cnc->connected()) return;
   const char* a = (g_axis == Axis::X) ? "X"
@@ -919,7 +914,7 @@ static void handleEncoder() {
 static void handleClick() {
   if (M5Dial.BtnA.wasPressed()) {
     g_jogAccumMm = 0.0f;
-    drawJogReadout();
+    drawHeader();
   }
 }
 
@@ -1209,7 +1204,7 @@ void loop() {
     if (!sLastCncConnected) g_haveWorkPos = false;   // stop showing stale coords
     drawCenter();
     drawFtpStatus();
-    drawJogReadout();
+    drawHeader();
   }
 
   // Poll grbl status ~5 Hz so the work-coord readout stays live.
