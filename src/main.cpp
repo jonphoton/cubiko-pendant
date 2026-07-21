@@ -69,31 +69,32 @@ static constexpr int CAL_IDX_SET_Z = 8;
 static constexpr int SCREEN = 240;
 static constexpr int CENTER = SCREEN / 2;
 
-// Axis letter + coord readout at the top; buttons stay at cy=152.
+// Axis letter + coord readout at the top.
 static constexpr int HEADER_Y  = 28;             // text center-y
-static constexpr int AXIS_Y    = 40;             // was 28
-static constexpr int SPEED_Y   = 76;             // was 60
-// Axis chips are much narrower — one letter — vs speed chips which
-// carry a 4-char label. The size difference is intentional and helps
-// tell the two rows apart at a glance.
-static constexpr int CHIP_W       = 44;          // axis chips (single letter)
-static constexpr int SPEED_CHIP_W = 70;          // speed chips (4-char label)
-static constexpr int CHIP_H       = 32;
-static constexpr int CHIP_GAP     = 6;
+static constexpr int AXIS_Y    = 42;
+static constexpr int SPEED_Y   = 86;
+// Axis chips: big size-3 letters, taller than the speed row. Speed
+// chips are wider (4-char labels). The shape difference tells the
+// rows apart at a glance. Row widths bounded by the round bezel —
+// the axis row sits higher, so it can't be as wide as the speed row.
+static constexpr int CHIP_W        = 56;         // axis chip width
+static constexpr int AXIS_CHIP_H   = 38;         // axis chip height
+static constexpr int SPEED_CHIP_W  = 70;         // speed chip width
+static constexpr int CHIP_H        = 32;         // speed chip height
+static constexpr int CHIP_GAP      = 6;
 
-// Single MENU button replaces the old CAL + UNL pair; opens the
-// secondary screen with CAL / UNL / ProbeZ / Return rows.
-static constexpr int MENU_BTN_W = 100;           // was 66
-static constexpr int MENU_BTN_H = 26;            // was 22
-static constexpr int MENU_BTN_Y = 114;           // was 92
+static constexpr int STATUS_Y  = 126;            // between speed row and MENU
+
+// Single MENU button; opens the secondary screen.
+static constexpr int MENU_BTN_W = 110;
+static constexpr int MENU_BTN_H = 26;
+static constexpr int MENU_BTN_Y = 134;
 static constexpr int MENU_BTN_X = CENTER - MENU_BTN_W / 2;
 
-static constexpr int STATUS_Y  = 145;            // was 120 (between menu + buttons)
-
-static constexpr int BTN_CY    = 152;
-static constexpr int BTN_R     = 22;                 // was 18 — bigger
-static constexpr int STOP_CX   = 42;
-static constexpr int PLAY_CX   = 198;
+static constexpr int BTN_CY    = 162;
+static constexpr int BTN_R     = 22;
+static constexpr int STOP_CX   = 40;
+static constexpr int PLAY_CX   = 200;
 
 // Menu screen layout — 5 rows of 28-tall buttons, 170 wide.
 static constexpr int MENU_ROW_W     = 170;
@@ -105,8 +106,7 @@ static constexpr int MENU_SPINDLE_Y = 104;
 static constexpr int MENU_PROBE_Y   = 136;
 static constexpr int MENU_RET_Y     = 168;
 
-static constexpr int JOG_Y     = 188;
-static constexpr int FTP_Y     = 213;
+static constexpr int FTP_Y     = 208;
 
 // ---------------------------------------------------------------
 // State
@@ -311,7 +311,7 @@ static void drawMenuButton() {
   M5Dial.Display.fillRoundRect(MENU_BTN_X, MENU_BTN_Y, MENU_BTN_W, MENU_BTN_H, 4, bg);
   M5Dial.Display.setTextColor(TFT_WHITE, bg);
   M5Dial.Display.setTextDatum(middle_center);
-  M5Dial.Display.setTextSize(1);
+  M5Dial.Display.setTextSize(2);
   M5Dial.Display.drawString("MENU",
                             MENU_BTN_X + MENU_BTN_W / 2,
                             MENU_BTN_Y + MENU_BTN_H / 2);
@@ -386,10 +386,14 @@ static void drawJobStatus() {
   }
 }
 
-// The big center X/Y/Z letter is gone (moved into the top header);
-// this now just repaints the stop / play region.
+// Repaint the stop / play buttons. Clears only the two circle
+// bounding boxes — a full-width band here would chew the bottom of
+// the MENU button and the status line, which share these rows.
 static void drawCenter() {
-  M5Dial.Display.fillRect(0, BTN_CY - BTN_R - 2, SCREEN, 2 * (BTN_R + 2),
+  const int d = 2 * (BTN_R + 2);
+  M5Dial.Display.fillRect(STOP_CX - BTN_R - 2, BTN_CY - BTN_R - 2, d, d,
+                          TFT_BLACK);
+  M5Dial.Display.fillRect(PLAY_CX - BTN_R - 2, BTN_CY - BTN_R - 2, d, d,
                           TFT_BLACK);
   drawStopButton();
   drawPlayButton();
@@ -502,8 +506,8 @@ static void drawMenu() {
 static void drawMain() {
   M5Dial.Display.fillScreen(TFT_BLACK);
   for (int i = 0; i < 3; i++) {
-    drawChip(chipX(i, CHIP_W),       AXIS_Y,  CHIP_W,       CHIP_H,
-             AXIS_LABELS[i],  i == (int)g_axis,  2);
+    drawChip(chipX(i, CHIP_W),       AXIS_Y,  CHIP_W,       AXIS_CHIP_H,
+             AXIS_LABELS[i],  i == (int)g_axis,  3);
     drawChip(chipX(i, SPEED_CHIP_W), SPEED_Y, SPEED_CHIP_W, CHIP_H,
              SPEED_LABELS[i], i == (int)g_speed, 2);
   }
@@ -810,7 +814,7 @@ static void handleTouch() {
     // Axis chips: start hold tracking, beep, defer the action to
     // release (tap = switch axis) or the 1s mark (hold = zero axis).
     for (int i = 0; i < 3; i++) {
-      if (hitRect(t.x, t.y, chipX(i, CHIP_W), AXIS_Y, CHIP_W, CHIP_H)) {
+      if (hitRect(t.x, t.y, chipX(i, CHIP_W), AXIS_Y, CHIP_W, AXIS_CHIP_H)) {
         g_heldAxisIdx   = i;
         g_heldStartMs   = millis();
         g_heldZeroFired = false;
