@@ -1072,10 +1072,14 @@ a{color:#4bd}
 </style></head><body>
 <h1>Cubiko Pendant</h1>
 <p>Drop a G-code file here — the pendant will auto-arm it as the current job.
-Press play on the pendant to run.</p>
+Run it from here or press play on the pendant.</p>
 <div id="drop" class="drop">Drop files here<br><small>or</small><br>
 <button class="btn" id="pick">Pick files</button></div>
 <input type="file" id="file" multiple>
+<div style="display:flex;gap:.6rem;justify-content:center;margin-top:1rem">
+<button class="btn" id="run">&#9654; Run</button>
+<button class="btn" id="calrun" style="background:#0353a4">Cal &amp; Run</button>
+</div>
 <pre id="log"></pre>
 <p style="text-align:center;font-size:11pt;color:#666">
 <a href="/update">Update firmware</a> &middot;
@@ -1095,6 +1099,11 @@ say('→ '+f.name+' ('+f.size+' bytes)');
 const fd=new FormData();fd.append('file',f);
 try{const r=await fetch('/upload',{method:'POST',body:fd});
 say(r.ok?'  ok':'  error '+r.status)}catch(e){say('  '+e.message)}}}
+async function act(path){
+try{const r=await fetch(path,{method:'POST'});
+say((r.ok?'✓ ':'✗ ')+await r.text())}catch(e){say('✗ '+e.message)}}
+document.getElementById('run').onclick=()=>act('/run');
+document.getElementById('calrun').onclick=()=>act('/calrun');
 </script></body></html>)HTML";
 
 static File g_httpUploadFile;
@@ -1190,6 +1199,48 @@ static void onPostUpdate() {
   }
 }
 
+// POST /run — start (or resume) the current job from the browser.
+static void onHttpRun() {
+  if (!g_cnc->connected()) {
+    g_http.send(409, "text/plain", "CNC not connected"); return;
+  }
+  if (g_calibrating) {
+    g_http.send(409, "text/plain", "calibration in progress"); return;
+  }
+  if (g_jobState == JobState::Playing) {
+    g_http.send(409, "text/plain", "already running"); return;
+  }
+  if (g_jobState == JobState::Paused) {
+    g_cnc->realtime('~');
+    g_jobState = JobState::Playing;
+    drawAll();
+    g_http.send(200, "text/plain", "resumed " + g_jobName); return;
+  }
+  if (g_jobState == JobState::Done && g_jobPath.length()) loadJob(g_jobPath);
+  if (g_jobState != JobState::Loaded) {
+    g_http.send(409, "text/plain", "no job loaded"); return;
+  }
+  ensureSpindleOff();
+  g_feedOverride = 100;
+  g_cnc->realtime(0x90);
+  g_jobState = JobState::Playing;
+  drawAll();
+  g_http.send(200, "text/plain", "running " + g_jobName);
+}
+
+// POST /calrun — calibrate, then auto-start the current job.
+static void onHttpCalRun() {
+  if (!g_cnc->connected()) {
+    g_http.send(409, "text/plain", "CNC not connected"); return;
+  }
+  if (!calRunEnabled()) {
+    g_http.send(409, "text/plain", "no job loaded or machine busy"); return;
+  }
+  onCalibrateAndRun();
+  drawAll();
+  g_http.send(200, "text/plain", "calibrating, then running " + g_jobName);
+}
+
 static void setupHttp() {
   if (!g_wifiConnected) return;
   g_http.on("/", HTTP_GET, onHttpRoot);
@@ -1198,6 +1249,8 @@ static void setupHttp() {
             onHttpUpload);
   g_http.on("/update", HTTP_GET,  onGetUpdate);
   g_http.on("/update", HTTP_POST, onPostUpdate);
+  g_http.on("/run",    HTTP_POST, onHttpRun);
+  g_http.on("/calrun", HTTP_POST, onHttpCalRun);
   g_http.begin();
 }
 
