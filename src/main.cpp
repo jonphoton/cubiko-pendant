@@ -96,15 +96,16 @@ static constexpr int BTN_R     = 22;
 static constexpr int STOP_CX   = 40;
 static constexpr int PLAY_CX   = 200;
 
-// Menu screen layout — 5 rows of 28-tall buttons, 170 wide.
+// Menu screen layout — 6 rows of 25-tall buttons, 170 wide.
 static constexpr int MENU_ROW_W     = 170;
-static constexpr int MENU_ROW_H     = 28;
+static constexpr int MENU_ROW_H     = 25;
 static constexpr int MENU_ROW_X     = CENTER - MENU_ROW_W / 2;
-static constexpr int MENU_CAL_Y     = 40;
-static constexpr int MENU_UNL_Y     = 72;
-static constexpr int MENU_SPINDLE_Y = 104;
-static constexpr int MENU_PROBE_Y   = 136;
-static constexpr int MENU_RET_Y     = 168;
+static constexpr int MENU_CAL_Y     = 36;
+static constexpr int MENU_CALRUN_Y  = 64;
+static constexpr int MENU_UNL_Y     = 92;
+static constexpr int MENU_SPINDLE_Y = 120;
+static constexpr int MENU_PROBE_Y   = 148;
+static constexpr int MENU_RET_Y     = 176;
 
 static constexpr int FTP_Y     = 208;
 
@@ -167,6 +168,9 @@ static uint32_t  g_jobLineNum  = 0;
 
 static bool      g_calibrating  = false;
 static int       g_calibrateIdx = 0;
+// Cal & Run: when set, the loaded job auto-starts as soon as the
+// calibrate sequence finishes. Cleared by stop and on completion.
+static bool      g_runAfterCal  = false;
 
 static bool      g_waitingForOk = false;
 
@@ -442,6 +446,8 @@ static bool spindleAllowed() {
          !g_calibrating;
 }
 
+static bool calRunEnabled();
+
 static void drawMenu() {
   M5Dial.Display.fillScreen(TFT_BLACK);
 
@@ -454,6 +460,14 @@ static void drawMenu() {
   M5Dial.Display.setTextDatum(middle_center);
   M5Dial.Display.setTextSize(2);
   M5Dial.Display.drawString("CAL", CENTER, MENU_CAL_Y + MENU_ROW_H / 2);
+
+  // Cal & Run row — calibrate then immediately start the loaded job.
+  const bool crArm = calRunEnabled();
+  const uint16_t crBg = crArm ? 0x033F : 0x18E3;
+  const uint16_t crFg = crArm ? TFT_WHITE : 0x7BEF;
+  M5Dial.Display.fillRoundRect(MENU_ROW_X, MENU_CALRUN_Y, MENU_ROW_W, MENU_ROW_H, 6, crBg);
+  M5Dial.Display.setTextColor(crFg, crBg);
+  M5Dial.Display.drawString("Cal & Run", CENTER, MENU_CALRUN_Y + MENU_ROW_H / 2);
 
   // UNL row
   const bool unlArm = g_cnc->connected();
@@ -592,6 +606,7 @@ static void onStop() {
   }
   g_calibrating  = false;
   g_calibrateIdx = 0;
+  g_runAfterCal  = false;
   g_waitingForOk = false;
   if (g_jobFile) g_jobFile.close();
   // Keep the file path so the user can press play again to re-run from
@@ -629,6 +644,17 @@ static void onCalibrate() {
   g_calibrating  = true;
   g_calibrateIdx = 0;
   g_waitingForOk = false;
+}
+
+static bool calRunEnabled() {
+  return calEnabled() &&
+         (g_jobState == JobState::Loaded || g_jobState == JobState::Done);
+}
+
+static void onCalibrateAndRun() {
+  if (!calRunEnabled()) return;
+  g_runAfterCal = true;
+  onCalibrate();
 }
 
 static void onUnlock() {
@@ -703,6 +729,18 @@ static void streamerTick() {
   if (g_calibrating) {
     if (g_calibrateIdx >= CAL_LINE_COUNT) {
       g_calibrating = false;
+      // Cal & Run: chain straight into the loaded job.
+      if (g_runAfterCal) {
+        g_runAfterCal = false;
+        if (g_jobState == JobState::Done && g_jobPath.length()) {
+          loadJob(g_jobPath);
+        }
+        if (g_jobState == JobState::Loaded) {
+          g_feedOverride = 100;
+          g_cnc->realtime(0x90);            // feed override reset
+          g_jobState = JobState::Playing;
+        }
+      }
       drawAll();
       return;
     }
@@ -759,6 +797,8 @@ static void handleMenuTouch() {
   bool redraw    = false;
   if (t.y >= MENU_CAL_Y && t.y < MENU_CAL_Y + MENU_ROW_H) {
     if (calEnabled()) { onCalibrate(); leaveMenu = true; }
+  } else if (t.y >= MENU_CALRUN_Y && t.y < MENU_CALRUN_Y + MENU_ROW_H) {
+    if (calRunEnabled()) { onCalibrateAndRun(); leaveMenu = true; }
   } else if (t.y >= MENU_UNL_Y && t.y < MENU_UNL_Y + MENU_ROW_H) {
     if (g_cnc->connected()) { onUnlock(); leaveMenu = true; }
   } else if (t.y >= MENU_SPINDLE_Y && t.y < MENU_SPINDLE_Y + MENU_ROW_H) {
