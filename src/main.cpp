@@ -54,8 +54,9 @@ static const char* const CALIBRATE_LINES[] = {
   "G0 Z2",               // 6 back off 2mm
   "G38.2 Z-3 F50",       // 7 slow precise probe (half previous feed)
   "G10 L20 P1 Z0",       // 8 work Z = 0 at contact (see CAL_IDX_SET_Z)
-  "G0 Z10",              // 9 retract 10mm
-  "G90",                 // 10 absolute
+  "G90",                 // 9 absolute
+  "G53 G0 Z-0.5",        // 10 lift to 0.5mm below machine Z max so any
+                         //    following lateral move can't drag the tool
 };
 static constexpr int CAL_LINE_COUNT =
     sizeof(CALIBRATE_LINES) / sizeof(CALIBRATE_LINES[0]);
